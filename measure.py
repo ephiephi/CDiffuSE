@@ -11,7 +11,7 @@ noisy_dir = "/data/ephraim/datasets_16k/noisy_testset_wav"
 clean_dir = "/data/ephraim/datasets_16k/clean_testset_wav"
 enhance_dir = "/data/ephraim/output/Enhanced/second_train/model37800/test/voicebank_Noisy_Test/"
 
-metrics = sm.load(["pesq", "stoi"])
+metrics = sm.load(["pesq", "stoi"], window=None)
 references = os.listdir(clean_dir)
 pkl_results_file = "SE_measures.pickle"
 

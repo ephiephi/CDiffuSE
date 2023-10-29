@@ -70,6 +70,8 @@ def make_spectrum(filename=None, y=None, is_slice=False, feature_type='logmag', 
 
 def transform(filename,indir,outdir):
   audio, sr = torchaudio.load(filename)
+  print("params_sample_rate: ", params.sample_rate) # todo: 
+  print("file_sample_rate: ", sr) # todo: 
   if params.sample_rate != sr:
     raise ValueError(f'Invalid sample rate {sr}.')
   audio = torch.clamp(audio[0], -1.0, 1.0)
