@@ -50,7 +50,7 @@ params = AttrDict(
     crop_mel_frames=62,  
 
     # Model params
-    #residual_layers=30,
+    residual_layers=30,
     #residual_channels=64,
     residual_channels=128,
     dilation_cycle_length=10,
