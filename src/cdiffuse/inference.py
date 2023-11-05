@@ -127,10 +127,10 @@ def inference_schedule(model, fast_sampling=False):
         c1[n] = (1-m[n])/(1-m[n-1])*(delta[n-1]/delta[n])*alpha[n]**0.5 + (1-m[n-1])*(delta_cond[n]/delta[n])/alpha[n]**0.5
         c2[n] = (m[n-1] * delta[n] - (m[n] *(1-m[n]))/(1-m[n-1])*alpha[n]*delta[n-1])*(alpha_cum[n-1]**0.5/delta[n])
         c3[n] = (1-m[n-1])*(delta_cond[n]/delta[n])*(1-alpha_cum[n])**0.5/(alpha[n])**0.5
-
-        # c1[n] = (1-m[n])/(1-m[n-1])*(delta[n-1]/delta[n])*alpha[n]**0.5 + (1-m[n-1])/(1-m[n])*(delta_cond[n]/delta[n])/alpha[n]**0.5
-        # c2[n] = (m[n-1] * delta[n] - (m[n] *(1-m[n]))/(1-m[n-1])*alpha[n]*delta[n-1])*(alpha_cum[n-1]**0.5/delta[n])-m[n]*(1-m[n-1])/(1-m[n])*(delta_cond[n]/delta[n])*alpha_cum[n-1]**0.5
-        # c3[n] = (1-m[n-1])/(1-m[n])*(delta_cond[n]/delta[n]**0.5)*1/alpha[n]**0.5
+        added_in_vscode = 1
+        #c1[n] = (1-m[n])/(1-m[n-1])*(delta[n-1]/delta[n])*alpha[n]**0.5 + (1-m[n-1])/(1-m[n])*(delta_cond[n]/delta[n])/alpha[n]**0.5
+        #c2[n] = (m[n-1] * delta[n] - (m[n] *(1-m[n]))/(1-m[n-1])*alpha[n]*delta[n-1])*(alpha_cum[n-1]**0.5/delta[n])-m[n]*(1-m[n-1])/(1-m[n])*(delta_cond[n]/delta[n])*alpha_cum[n-1]**0.5
+        #c3[n] = (1-m[n-1])/(1-m[n])*(delta_cond[n]/delta[n]**0.5)*1/alpha[n]**0.5
 
 
       else:
