@@ -157,8 +157,12 @@ class DiffuSELearner:
       noise = torch.randn_like(audio)
       noisy_audio = (1-m) * noise_scale_sqrt  * audio + m * noise_scale_sqrt * noisy  + (1.0 - (1+m**2) *noise_scale)**0.5 * noise
       combine_noise = (m * noise_scale_sqrt * (noisy-audio) + (1.0 - (1+m**2) *noise_scale)**0.5 * noise) / (1-noise_scale)**0.5
+      
       predicted = self.model(noisy_audio, spectrogram, t)
       loss = self.loss_fn(combine_noise, predicted.squeeze(1))
+
+      #predicted = self.model(noisy_audio, spectrogram, t)
+      #loss = self.loss_fn(noise, predicted.squeeze(1))
 
     self.scaler.scale(loss).backward()
     self.scaler.unscale_(self.optimizer)
