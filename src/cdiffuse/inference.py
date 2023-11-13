@@ -31,8 +31,9 @@ from os import path
 from glob import glob
 from tqdm import tqdm
 
-from torchaudio.pipelines import SQUIM_OBJECTIVE, SQUIM_SUBJECTIVE
-
+# from torchaudio.pipelines import SQUIM_OBJECTIVE, SQUIM_SUBJECTIVE
+from squim_code import SQUIM_OBJECTIVE  # , SQUIM_SUBJECTIVE
+from mode import MODE
 
 random.seed(23)
 
@@ -176,8 +177,9 @@ def predict(
     c3,
     delta,
     delta_bar,
-    do_guidance = True
-    guidance_scale= 1,
+    do_guidance=True,
+    guidance_scale=1,
+    guidance_type="pesq",
     device=torch.device("cuda"),
 ):
     with torch.no_grad():
@@ -204,10 +206,12 @@ def predict(
         gamma = [0.2]
         for n in range(len(alpha) - 1, -1, -1):
             if n > 0:
-                predicted_noise = model(audio, spectrogram, torch.tensor([T[n]], device=audio.device)).squeeze(1)
-                
+                predicted_noise = model(
+                    audio, spectrogram, torch.tensor([T[n]], device=audio.device)
+                ).squeeze(1)
+
                 # grad(classifier, x_t)
-                if do_guidance:
+                if do_guidance and guidance_type == "pesq":
                     with torch.enable_grad():
                         # x_in = x.detach().requires_grad_(True)
                         # logits = classifier(x_in, t)
@@ -215,11 +219,25 @@ def predict(
                         # selected = log_probs[range(len(logits)), y.view(-1)]
                         # gradient = (torch.autograd.grad(selected.sum(), x_in)[0] * args.classifier_scale )
                         x_in = audio.detach().requires_grad_(True)
+                        objective_model = SQUIM_OBJECTIVE.get_model().cuda()
+                        objective_model.train()
                         stoi_hyp, pesq_hyp, si_sdr_hyp = objective_model(x_in[0:1, :])
-                        gradient = torch.autograd.grad(stoi_hyp, x_in)[0]
+                        print("pesq_hyp: ", pesq_hyp)
+                        gradient = torch.autograd.grad(pesq_hyp, x_in)[0]
+
+                if do_guidance and guidance_type == "mode":
+                    with torch.enable_grad():
+                        x_in = audio.detach().requires_grad_(True)
+                        model = MODE(
+                            num_experts=3, output_size=512 // 2 + 1, context=10
+                        )
+                        # logits = classifier(x_in, t)
+                        # log_probs = F.log_softmax(logits, dim=-1)
+                        # selected = log_probs[range(len(logits)), y.view(-1)]
+                        # gradient = (torch.autograd.grad(selected.sum(), x_in)[0] * args.classifier_scale )
 
                 audio = c1[n] * audio + c2[n] * noisy_audio - c3[n] * predicted_noise
-                #add guidance
+                # add guidance
                 if do_guidance:
                     audio = audio + guidance_scale * gradient
 
