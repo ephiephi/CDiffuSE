@@ -176,7 +176,8 @@ def predict(
     c3,
     delta,
     delta_bar,
-    guidance_scale=1,
+    do_guidance = True
+    guidance_scale= 1,
     device=torch.device("cuda"),
 ):
     with torch.no_grad():
@@ -204,19 +205,23 @@ def predict(
         for n in range(len(alpha) - 1, -1, -1):
             if n > 0:
                 predicted_noise = model(audio, spectrogram, torch.tensor([T[n]], device=audio.device)).squeeze(1)
+                
                 # grad(classifier, x_t)
-                with torch.enable_grad():
-                    # x_in = x.detach().requires_grad_(True)
-                    # logits = classifier(x_in, t)
-                    # log_probs = F.log_softmax(logits, dim=-1)
-                    # selected = log_probs[range(len(logits)), y.view(-1)]
-                    # gradient = (torch.autograd.grad(selected.sum(), x_in)[0] * args.classifier_scale )
-                    x_in = audio.detach().requires_grad_(True)
-                    gradient = 
+                if do_guidance:
+                    with torch.enable_grad():
+                        # x_in = x.detach().requires_grad_(True)
+                        # logits = classifier(x_in, t)
+                        # log_probs = F.log_softmax(logits, dim=-1)
+                        # selected = log_probs[range(len(logits)), y.view(-1)]
+                        # gradient = (torch.autograd.grad(selected.sum(), x_in)[0] * args.classifier_scale )
+                        x_in = audio.detach().requires_grad_(True)
+                        stoi_hyp, pesq_hyp, si_sdr_hyp = objective_model(x_in[0:1, :])
+                        gradient = torch.autograd.grad(stoi_hyp, x_in)[0]
 
                 audio = c1[n] * audio + c2[n] * noisy_audio - c3[n] * predicted_noise
                 #add guidance
-                audio = audio + guidance_scale * gradient
+                if do_guidance:
+                    audio = audio + guidance_scale * gradient
 
                 noise = torch.randn_like(audio)
                 newsigma = delta_bar[n] ** 0.5
