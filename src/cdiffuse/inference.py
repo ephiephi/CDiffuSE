@@ -34,6 +34,7 @@ from tqdm import tqdm
 # from torchaudio.pipelines import SQUIM_OBJECTIVE, SQUIM_SUBJECTIVE
 from squim_code import SQUIM_OBJECTIVE  # , SQUIM_SUBJECTIVE
 from mode import MODE
+from pydub import AudioSegment
 
 random.seed(23)
 
@@ -178,10 +179,11 @@ def predict(
     delta,
     delta_bar,
     do_guidance=True,
-    guidance_scale=1,
+    guidance_scale=0.0001,
     guidance_type="pesq",
     device=torch.device("cuda"),
 ):
+    print("guidance_scale: ", guidance_scale)
     with torch.no_grad():
         # Expand rank 2 tensors by adding a batch dimension.
         if len(spectrogram.shape) == 2:
@@ -228,9 +230,58 @@ def predict(
                 if do_guidance and guidance_type == "mode":
                     with torch.enable_grad():
                         x_in = audio.detach().requires_grad_(True)
-                        model = MODE(
+                        
+                        mode_model = MODE(
                             num_experts=3, output_size=512 // 2 + 1, context=10
                         )
+                        mode_path = "/data/ephraim/mode/mode3-epoch150-no_norm-new.pth"
+                        print("start loading mode weights")
+                        mode_model.load_state_dict(
+                            torch.load(mode_path, map_location="cpu")["state_dict"]
+                        )
+                        print("done")
+                        mode_model.eval()
+
+                        sig = AudioSegment.from_raw(
+                            audio,
+                            format="s16le",
+                            bitrate="16k",
+                            sample_width=2,
+                            frame_rate=16000,
+                            channels=1,
+                        )
+                        noisy_stft = transform(sig)
+                        noisy_stft = noisy_stft.squeeze()
+                        # reshape to get context
+                        context_noisy_stft = F.pad(noisy_stft, [0, 0] + [5, 4])
+                        context_noisy_stft = context_noisy_stft.unfold(
+                            dimension=0, size=10, step=1
+                        )
+                        out, _ = mode_model(
+                            context_noisy_stft.unsqueeze(1).contiguous()
+                        )
+                        out = out.detach().cpu().numpy()
+                        logits = out  # need to be as logits shape
+                        log_probs = F.log_softmax(logits, dim=-1)
+
+                        noisy_sig = AudioSegment.from_raw(
+                            noisy_audio,
+                            format="s16le",
+                            bitrate="16k",
+                            sample_width=params["sample_width"],
+                            frame_rate=params["frame_rate"],
+                            channels=params["channels"],
+                        )
+                        guide_stft = transform(noisy_sig)
+                        guide_stft = guide_stft.squeeze()
+                        # reshape to get context
+                        context_guide_stft = F.pad(noisy_stft, [0, 0] + [5, 4])
+                        context_guide_stft = context_noisy_stft.unfold(
+                            dimension=0, size=10, step=1
+                        )
+                        Y, _ = mode_model(context_guide_stft.unsqueeze(1).contiguous())
+                        selected = log_probs[range(len(logits)), Y.view(-1)]
+                        gradient = torch.autograd.grad(selected.sum(), x_in)[0]
                         # logits = classifier(x_in, t)
                         # log_probs = F.log_softmax(logits, dim=-1)
                         # selected = log_probs[range(len(logits)), y.view(-1)]
