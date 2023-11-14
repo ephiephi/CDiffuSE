@@ -35,6 +35,8 @@ from tqdm import tqdm
 from squim_code import SQUIM_OBJECTIVE  # , SQUIM_SUBJECTIVE
 from mode import MODE
 from pydub import AudioSegment
+from mode import TRANSFORMS as transform
+from torch.nn import functional as F
 
 random.seed(23)
 
@@ -230,7 +232,7 @@ def predict(
                 if do_guidance and guidance_type == "mode":
                     with torch.enable_grad():
                         x_in = audio.detach().requires_grad_(True)
-                        
+
                         mode_model = MODE(
                             num_experts=3, output_size=512 // 2 + 1, context=10
                         )
@@ -242,14 +244,13 @@ def predict(
                         print("done")
                         mode_model.eval()
 
-                        sig = AudioSegment.from_raw(
-                            audio,
-                            format="s16le",
-                            bitrate="16k",
-                            sample_width=2,
-                            frame_rate=16000,
-                            channels=1,
+                        sig_array = (audio.cpu().numpy().flatten() * 2**15).astype(
+                            np.int16
                         )
+                        sig = AudioSegment(
+                            sig_array, channels=1, sample_width=2, frame_rate=16000
+                        )
+
                         noisy_stft = transform(sig)
                         noisy_stft = noisy_stft.squeeze()
                         # reshape to get context
@@ -264,13 +265,14 @@ def predict(
                         logits = out  # need to be as logits shape
                         log_probs = F.log_softmax(logits, dim=-1)
 
-                        noisy_sig = AudioSegment.from_raw(
-                            noisy_audio,
-                            format="s16le",
-                            bitrate="16k",
-                            sample_width=params["sample_width"],
-                            frame_rate=params["frame_rate"],
-                            channels=params["channels"],
+                        noisy_sig_array = (
+                            noisy_audio.cpu().numpy().flatten() * 2**15
+                        ).astype(np.int16)
+                        noisy_sig = AudioSegment(
+                            noisy_sig_array,
+                            channels=1,
+                            sample_width=2,
+                            frame_rate=16000,
                         )
                         guide_stft = transform(noisy_sig)
                         guide_stft = guide_stft.squeeze()

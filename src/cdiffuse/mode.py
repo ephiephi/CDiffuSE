@@ -418,9 +418,7 @@ def run_mode():
             CevaLogMel(),
         ]
     )
-    model = MODE(
-        num_experts=experts, output_size=params["nfft"] // 2 + 1, context=10
-    )
+    model = MODE(num_experts=experts, output_size=params["nfft"] // 2 + 1, context=10)
     print("start loading weights")
     model.load_state_dict(torch.load(model_path, map_location="cpu")["state_dict"])
     print("done")
@@ -431,6 +429,39 @@ def run_mode():
         for noisy_file in tqdm(noisy_files)
     )
 
+
+
+SYNT_WIN =  loadmat("/data/ephraim/mode/synt_win.mat")["synt_win"]
+BETA = 0.04
+PARAMS = {
+    # signal params
+    "frame_rate": 16000,
+    "sample_width": 2,
+    "channels": 1,
+    # spp params
+    "spp_threshold": 10,  # 10 - no infuance on VAD; 100 - VAD has influnce
+    "spp_vad_attenuation_factor": 0.5,  # 0.03 - default value ;
+    "beta": float(BETA),
+    # stft params
+    "nfft": 512,
+    "overlap": 0.75,
+    "eps": 1e-6,
+    "synt_win": SYNT_WIN,
+}
+TRANSFORMS = Compose(
+    [
+        CevaAudioSegment2Wave(byte_to_float=True),
+        CevaToTensor(),
+        CevaSpectogram(
+            PARAMS["frame_rate"],
+            PARAMS["nfft"],
+            PARAMS["nfft"] / PARAMS["frame_rate"],
+            (PARAMS["nfft"] * (1 - PARAMS["overlap"])) / PARAMS["frame_rate"],
+            "hann",
+        ),
+        CevaLogMel(),
+    ]
+)
 
 def main():
     print("start")
