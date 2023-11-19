@@ -92,10 +92,6 @@ def inference_schedule(model, fast_sampling=False):
                 T.append(t + twiddle)
                 break
     T = np.array(T, dtype=np.float32)
-    # print("len(T): ", len(T))
-    # print("len(alpha): ", len(alpha))
-    # print("len(inference_noise_schedule): ", len(inference_noise_schedule))
-    # raise Exception
 
     m = [0 for i in alpha]
     gamma = [0 for i in alpha]
@@ -189,7 +185,6 @@ def predict(
     guidance_type="pesq_t-1",
     device=torch.device("cuda"),
 ):
-    print("len(alpha): ", len(alpha))
     with torch.no_grad():
         # Expand rank 2 tensors by adding a batch dimension.
         if len(spectrogram.shape) == 2:
@@ -212,125 +207,34 @@ def predict(
         )
         audio = noisy_audio
         gamma = [0.2]
-        gradient_sigma_norm = np.zeros(len(alpha))
-        predicted_noise_norm = np.zeros(len(alpha))
-        for n in range(len(alpha) - 1, -1, -1):
-            if n > 0:
-                predicted_noise = model(
-                    audio, spectrogram, torch.tensor([T[n]], device=audio.device)
-                ).squeeze(1)
+        n=1
+        predicted_noise = model(
+            audio, spectrogram, torch.tensor([T[n]], device=audio.device)
+        ).squeeze(1)
 
-                # grad(classifier, x_t)
-                if do_guidance and guidance_type == "pesq":
-                    with torch.enable_grad():
-                        # x_in = x.detach().requires_grad_(True)
-                        # logits = classifier(x_in, t)
-                        # log_probs = F.log_softmax(logits, dim=-1)
-                        # selected = log_probs[range(len(logits)), y.view(-1)]
-                        # gradient = (torch.autograd.grad(selected.sum(), x_in)[0] * args.classifier_scale )
-                        x_in = audio.detach().requires_grad_(True)
-                        objective_model = SQUIM_OBJECTIVE.get_model().cuda()
-                        objective_model.train()
-                        stoi_hyp, pesq_hyp, si_sdr_hyp = objective_model(x_in[0:1, :])
-                        gradient = torch.autograd.grad(pesq_hyp, x_in)[0]
+        
+        # audio = c1[n] * audio + c2[n] * noisy_audio - c3[n] * predicted_noise
+        
+        # add guidance
+        if do_guidance and guidance_type == "pesq_t-1":
+            with torch.enable_grad():
+                x_in = audio.detach().requires_grad_(True)
+                objective_model = SQUIM_OBJECTIVE.get_model().cuda()
+                objective_model.train()
+                stoi_hyp, pesq_hyp, si_sdr_hyp = objective_model(x_in[0:1, :])
+                print("pesq_hyp: ", pesq_hyp)
+                gradient = torch.autograd.grad(pesq_hyp, x_in)[0]
 
-                if do_guidance and guidance_type == "mode":
-                    with torch.enable_grad():
-                        x_in = audio.detach().requires_grad_(True)
+        noise = torch.randn_like(audio)
+        newsigma = delta_bar[n] ** 0.5
 
-                        mode_model = MODE(
-                            num_experts=3, output_size=512 // 2 + 1, context=10
-                        )
-                        mode_path = "/data/ephraim/mode/mode3-epoch150-no_norm-new.pth"
-                        print("start loading mode weights")
-                        mode_model.load_state_dict(
-                            torch.load(mode_path, map_location="cpu")["state_dict"]
-                        )
-                        print("done")
-                        mode_model.eval()
+        if do_guidance:
+            # new_mean = (p_mean_var["mean"].float() + p_mean_var["variance"] * gradient.float() )
+            audio = audio + newsigma * guidance_scale * gradient
 
-                        sig_array = (audio.cpu().numpy().flatten() * 2**15).astype(
-                            np.int16
-                        )
-                        sig = AudioSegment(
-                            sig_array, channels=1, sample_width=2, frame_rate=16000
-                        )
+        # audio += newsigma * noise
 
-                        noisy_stft = transform(sig)
-                        noisy_stft = noisy_stft.squeeze()
-                        # reshape to get context
-                        context_noisy_stft = F.pad(noisy_stft, [0, 0] + [5, 4])
-                        context_noisy_stft = context_noisy_stft.unfold(
-                            dimension=0, size=10, step=1
-                        )
-                        out, _ = mode_model(
-                            context_noisy_stft.unsqueeze(1).contiguous()
-                        )
-                        out = out.detach().cpu().numpy()
-                        logits = out  # need to be as logits shape
-                        log_probs = F.log_softmax(logits, dim=-1)
-
-                        noisy_sig_array = (
-                            noisy_audio.cpu().numpy().flatten() * 2**15
-                        ).astype(np.int16)
-                        noisy_sig = AudioSegment(
-                            noisy_sig_array,
-                            channels=1,
-                            sample_width=2,
-                            frame_rate=16000,
-                        )
-                        guide_stft = transform(noisy_sig)
-                        guide_stft = guide_stft.squeeze()
-                        # reshape to get context
-                        context_guide_stft = F.pad(noisy_stft, [0, 0] + [5, 4])
-                        context_guide_stft = context_noisy_stft.unfold(
-                            dimension=0, size=10, step=1
-                        )
-                        Y, _ = mode_model(context_guide_stft.unsqueeze(1).contiguous())
-                        selected = log_probs[range(len(logits)), Y.view(-1)]
-                        gradient = torch.autograd.grad(selected.sum(), x_in)[0]
-                        # logits = classifier(x_in, t)
-                        # log_probs = F.log_softmax(logits, dim=-1)
-                        # selected = log_probs[range(len(logits)), y.view(-1)]
-                        # gradient = (torch.autograd.grad(selected.sum(), x_in)[0] * args.classifier_scale )
-
-                audio = c1[n] * audio + c2[n] * noisy_audio - c3[n] * predicted_noise
-                # add guidance
-
-                if do_guidance and guidance_type == "pesq_t-1":
-                    with torch.enable_grad():
-                        x_in = audio.detach().requires_grad_(True)
-                        objective_model = SQUIM_OBJECTIVE.get_model().cuda()
-                        objective_model.train()
-                        stoi_hyp, pesq_hyp, si_sdr_hyp = objective_model(x_in[0:1, :])
-                        gradient = torch.autograd.grad(pesq_hyp, x_in)[0]
-
-                noise = torch.randn_like(audio)
-                newsigma = delta_bar[n] ** 0.5
-
-                if do_guidance:
-                    # new_mean = (p_mean_var["mean"].float() + p_mean_var["variance"] * gradient.float() )
-                    gradient_sigma_norm[n] = newsigma * np.linalg.norm(
-                        gradient.cpu().numpy()
-                    )
-                    predicted_noise_norm[n] = np.linalg.norm(
-                        predicted_noise.cpu().numpy()
-                    )
-                    gama_scale = predicted_noise_norm[n] / gradient_sigma_norm[n]
-                    print("gama_scale: ", gama_scale)
-                    with open("scales.txt", "w") as file1:
-                        file1.write("{} \n".format(gama_scale))
-
-                    audio = audio + gama_scale * newsigma * guidance_scale * gradient
-
-                audio += newsigma * noise
-            else:
-                predicted_noise = model(
-                    audio, spectrogram, torch.tensor([T[n]], device=audio.device)
-                ).squeeze(1)
-                audio = c1[n] * audio - c3[n] * predicted_noise
-                audio = (1 - gamma[n]) * audio + gamma[n] * noisy_audio
-            audio = torch.clamp(audio, -1.0, 1.0)
+        audio = torch.clamp(audio, -1.0, 1.0)
     print(delta_bar[n] ** 0.5)
     return audio, model.params.sample_rate
 
