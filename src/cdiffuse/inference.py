@@ -37,6 +37,9 @@ from mode import MODE
 from pydub import AudioSegment
 from mode import TRANSFORMS as transform
 from torch.nn import functional as F
+from torchmetrics.audio import ScaleInvariantSignalDistortionRatio
+import copy
+
 
 random.seed(23)
 
@@ -171,6 +174,8 @@ def inference_schedule(model, fast_sampling=False):
 
 
 def predict(
+    wav_name,
+    clean_wavpath,
     spectrogram,
     model,
     noisy_signal,
@@ -185,8 +190,11 @@ def predict(
     delta,
     delta_bar,
     do_guidance=True,
-    guidance_scale=0.09,
-    guidance_type="pesq_t-1",
+    guidance_scale=0.1,
+    guidance_type="sisdr",
+    variance_scale="no",
+    grad_time="t-1",
+    infer_once=False,
     device=torch.device("cuda"),
 ):
     print("len(alpha): ", len(alpha))
@@ -214,29 +222,51 @@ def predict(
         gamma = [0.2]
         gradient_sigma_norm = np.zeros(len(alpha))
         predicted_noise_norm = np.zeros(len(alpha))
+
         for n in range(len(alpha) - 1, -1, -1):
             if n > 0:
+                if n > 1 and infer_once:
+                    continue
                 predicted_noise = model(
                     audio, spectrogram, torch.tensor([T[n]], device=audio.device)
                 ).squeeze(1)
 
+                audio_t = copy.copy(audio)
+                if not infer_once:
+                    audio = (
+                        c1[n] * audio + c2[n] * noisy_audio - c3[n] * predicted_noise
+                    )
+
+                if do_guidance:
+                    if grad_time == "t":
+                        x_in = audio_t
+                    elif grad_time == "t-1":
+                        x_in = audio
+
                 # grad(classifier, x_t)
-                if do_guidance and guidance_type == "pesq":
+                if do_guidance and guidance_type == "sisdr":
+                    clean_speech, _ = librosa.load(
+                        os.path.join(clean_wavpath, wav_name),
+                        sr=16000,
+                    )
+                    target = torch.zeros(
+                        spectrogram.shape[0],
+                        model.params.hop_samples * spectrogram.shape[-1],
+                        device=device,
+                    )
+                    target[:, : clean_speech.shape[0]] = torch.from_numpy(
+                        clean_speech
+                    ).to(device)
                     with torch.enable_grad():
-                        # x_in = x.detach().requires_grad_(True)
-                        # logits = classifier(x_in, t)
-                        # log_probs = F.log_softmax(logits, dim=-1)
-                        # selected = log_probs[range(len(logits)), y.view(-1)]
-                        # gradient = (torch.autograd.grad(selected.sum(), x_in)[0] * args.classifier_scale )
-                        x_in = audio.detach().requires_grad_(True)
-                        objective_model = SQUIM_OBJECTIVE.get_model().cuda()
-                        objective_model.train()
-                        stoi_hyp, pesq_hyp, si_sdr_hyp = objective_model(x_in[0:1, :])
-                        gradient = torch.autograd.grad(pesq_hyp, x_in)[0]
+                        preds = x_in.detach().requires_grad_(True)
+
+                        si_sdr = ScaleInvariantSignalDistortionRatio().to(device)
+                        sisdr_score = si_sdr(preds, target)
+                        gradient = torch.autograd.grad(sisdr_score, preds)[0]
 
                 if do_guidance and guidance_type == "mode":
                     with torch.enable_grad():
-                        x_in = audio.detach().requires_grad_(True)
+                        x_in = x_in.detach().requires_grad_(True)
 
                         mode_model = MODE(
                             num_experts=3, output_size=512 // 2 + 1, context=10
@@ -249,7 +279,7 @@ def predict(
                         print("done")
                         mode_model.eval()
 
-                        sig_array = (audio.cpu().numpy().flatten() * 2**15).astype(
+                        sig_array = (x_in.cpu().numpy().flatten() * 2**15).astype(
                             np.int16
                         )
                         sig = AudioSegment(
@@ -294,12 +324,14 @@ def predict(
                         # selected = log_probs[range(len(logits)), y.view(-1)]
                         # gradient = (torch.autograd.grad(selected.sum(), x_in)[0] * args.classifier_scale )
 
-                audio = c1[n] * audio + c2[n] * noisy_audio - c3[n] * predicted_noise
-                # add guidance
-
-                if do_guidance and guidance_type == "pesq_t-1":
+                if do_guidance and guidance_type == "pesq":
                     with torch.enable_grad():
-                        x_in = audio.detach().requires_grad_(True)
+                        # x_in = x.detach().requires_grad_(True)
+                        # logits = classifier(x_in, t)
+                        # log_probs = F.log_softmax(logits, dim=-1)
+                        # selected = log_probs[range(len(logits)), y.view(-1)]
+                        # gradient = (torch.autograd.grad(selected.sum(), x_in)[0] * args.classifier_scale )
+                        x_in = x_in.detach().requires_grad_(True)
                         objective_model = SQUIM_OBJECTIVE.get_model().cuda()
                         objective_model.train()
                         stoi_hyp, pesq_hyp, si_sdr_hyp = objective_model(x_in[0:1, :])
@@ -310,26 +342,35 @@ def predict(
 
                 if do_guidance:
                     # new_mean = (p_mean_var["mean"].float() + p_mean_var["variance"] * gradient.float() )
-                    gradient_sigma_norm[n] = newsigma * np.linalg.norm(
-                        gradient.cpu().numpy()
-                    )
+                    gradient_norm = np.linalg.norm(gradient.cpu().numpy())
+                    if variance_scale == "beta":
+                        var_scale = (1 - alpha_cum[n]) ** 0.5
+                    elif variance_scale == "newsigma":
+                        var_scale = newsigma
+                    elif variance_scale == "no":
+                        var_scale = 1
+                    else:
+                        print("variance_scale type isn't known")
+                        raise Exception
+                    gradient_sigma_norm[n] = var_scale * gradient_norm
                     predicted_noise_norm[n] = np.linalg.norm(
                         predicted_noise.cpu().numpy()
                     )
                     gama_scale = predicted_noise_norm[n] / gradient_sigma_norm[n]
                     print("gama_scale: ", gama_scale)
-                    with open("scales.txt", "w") as file1:
+                    with open("scales.txt", "a") as file1:
                         file1.write("{} \n".format(gama_scale))
 
-                    audio = audio + gama_scale * newsigma * guidance_scale * gradient
+                    audio = audio + gama_scale * var_scale * guidance_scale * gradient
 
                 audio += newsigma * noise
             else:
-                predicted_noise = model(
-                    audio, spectrogram, torch.tensor([T[n]], device=audio.device)
-                ).squeeze(1)
-                audio = c1[n] * audio - c3[n] * predicted_noise
-                audio = (1 - gamma[n]) * audio + gamma[n] * noisy_audio
+                if not infer_once:
+                    predicted_noise = model(
+                        audio, spectrogram, torch.tensor([T[n]], device=audio.device)
+                    ).squeeze(1)
+                    audio = c1[n] * audio - c3[n] * predicted_noise
+                    audio = (1 - gamma[n]) * audio + gamma[n] * noisy_audio
             audio = torch.clamp(audio, -1.0, 1.0)
     print(delta_bar[n] ** 0.5)
     return audio, model.params.sample_rate
@@ -365,12 +406,16 @@ def main(args):
         os.makedirs(output_path)
     for spec in tqdm(specnames):
         spectrogram = torch.from_numpy(np.load(spec))
+        wav_name = spec.split("/")[-1].replace(".spec.npy", "")
         noisy_signal, _ = librosa.load(
-            os.path.join(args.wav_path, spec.split("/")[-1].replace(".spec.npy", "")),
+            os.path.join(args.wav_path, wav_name),
             sr=16000,
         )
         wlen = noisy_signal.shape[0]
+        clean_wavpath = args.wav_path.replace("noisy_testset_wav", "clean_testset_wav")
         audio, sr = predict(
+            wav_name,
+            clean_wavpath,
             spectrogram,
             model,
             noisy_signal,

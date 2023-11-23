@@ -17,11 +17,11 @@ print("np_ver:", numpy.version.version)
 
 noisy_dir = "/data/ephraim/datasets_16k/noisy_testset_wav"
 clean_dir = "/data/ephraim/datasets_16k/clean_testset_wav"
-enhance_dir = "/data/ephraim/output/Enhanced/pretrained_base_guided_pesq_t-1_scale0_09_sigma_gamas/model370200/voicebank_Noisy_Test/"
+enhance_dir = "/data/ephraim/output/Enhanced/pretrained_base_guided_sisdr_t-1_scale0_5_gamas_50steps/model370200/voicebank_Noisy_Test/"
 
 references = os.listdir(clean_dir)
 # pkl_results_file = "SE_measures_guided_pesq_t-1_s0_1_sigma.pickle" ---> pesq_diff=0.5168
-pkl_results_file = "guided_pesq_t-1_scale0_09_sigma_gamas.pickle"
+pkl_results_file = "guided_sisdr_t-1_scale0_5_gamas_50steps.pickle"
 
 
 # objective_model = SQUIM_OBJECTIVE.get_model()
